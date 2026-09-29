@@ -99,9 +99,11 @@ def submit_query(
         req_dicts = [{"req_code": r.req_code, "description": r.description} for r in requirements]
         response, claims = generate_response(db, query.id, query_text, req_dicts, evidence_pack)
         
-        # 5. Resolve proposed citations
+        # 5. Resolve proposed citations and validate semantics
+        from app.validation.claim_validator import validate_claim_semantics
         for claim in claims:
             validate_citations(db, claim.id, getattr(claim, "_cited_evidence_codes", []))
+            validate_claim_semantics(db, claim.id)
             
         db.commit()
         

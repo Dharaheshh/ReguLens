@@ -109,6 +109,11 @@ def submit_query(
         from app.validation.sufficiency_engine import run_sufficiency_check
         run_sufficiency_check(db, query.id)
             
+        # 7. Check for contradictions
+        from app.validation.contradiction_engine import detect_contradictions
+        for claim in claims:
+            detect_contradictions(db, claim.id)
+            
         db.commit()
         
     except LLMCallError as e:
@@ -188,5 +193,21 @@ def build_query_response(db: Session, query_id: uuid.UUID) -> dict:
                 "validation_state": c.validation_state,
                 "citations": cit_list
             })
+            
+            # Fetch contradictions for this claim
+            from app.models import Contradiction
+            contras = db.query(Contradiction).filter(Contradiction.claim_a_id == c.id).all()
+            for contra in contras:
+                # We need a minimal representation of claim_b for the frontend
+                cb = db.query(Claim).filter(Claim.id == contra.claim_b_id).first()
+                if not cb:
+                    continue
+                res_dict["contradictions"].append({
+                    "contradiction_id": contra.id,
+                    "claim_a": {"claim_code": c.claim_code, "claim_text": c.claim_text},
+                    "claim_b": {"claim_code": cb.claim_code, "claim_text": cb.claim_text},
+                    "classification": contra.classification,
+                    "reasoning": contra.reasoning
+                })
             
     return res_dict

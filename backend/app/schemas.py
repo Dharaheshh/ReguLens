@@ -37,20 +37,17 @@ class DocumentDetailResponse(BaseModel):
     doc_type: str
     versions: list[DocumentVersionItem]
 
+# --- Query schemas ---
 
-# --- Query & Response schemas (TASK-014) ---
-
-class QueryCreate(BaseModel):
+class QueryRequest(BaseModel):
     query_text: str
 
-
-class RequirementResponseItem(BaseModel):
+class RequirementResponse(BaseModel):
     req_code: str
     description: str
-    status: str
+    status: str | None = None
 
-
-class CitationResponseItem(BaseModel):
+class EvidenceCitationResponse(BaseModel):
     evidence_id: uuid.UUID
     evidence_code: str
     document: str | None = None
@@ -58,31 +55,28 @@ class CitationResponseItem(BaseModel):
     page_end: int | None = None
     section: str | None = None
 
-
-class ClaimResponseItem(BaseModel):
+class ClaimResponse(BaseModel):
     claim_id: uuid.UUID
     claim_code: str
     claim_text: str
     validation_state: str | None = None
-    citations: list[CitationResponseItem]
+    citations: list[EvidenceCitationResponse] = []
 
-
-class ContradictionResponseItem(BaseModel):
+class ContradictionResponse(BaseModel):
     contradiction_id: uuid.UUID
     claim_a: dict
     claim_b: dict
     classification: str
     reasoning: str
 
-
 class QueryResponse(BaseModel):
     query_id: uuid.UUID
-    response_id: uuid.UUID
+    response_id: uuid.UUID | None = None
     draft_text: str | None = None
     sufficiency_status: str | None = None
     gap_summary: str | None = None
-    requirements: list[RequirementResponseItem]
-    claims: list[ClaimResponseItem]
-    contradictions: list[ContradictionResponseItem]
-    status: str
+    requirements: list[RequirementResponse] = []
+    claims: list[ClaimResponse] = []
+    contradictions: list[ContradictionResponse] = []
+    status: str | None = None
 

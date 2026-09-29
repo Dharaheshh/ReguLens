@@ -1,20 +1,22 @@
-"""Query endpoints - TASK-014.
+"""Query Orchestration - TASK-014.
 
 POST /api/v1/queries
-GET  /api/v1/queries/{query_id}
 """
 import logging
 import uuid
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import (
-    RegulatoryQuery, Response as ResponseModel, Requirement, Claim, Citation, Evidence,
-    Chunk, DocumentVersion, Document, RequirementEvidence
+    RegulatoryQuery, Requirement, RequirementEvidence, Response, Claim,
+    Citation, Evidence, Chunk, Document
 )
 from app.schemas import (
-    QueryCreate, QueryResponse, RequirementResponseItem, ClaimResponseItem, CitationResponseItem
+    QueryRequest, QueryResponse, RequirementResponse, ClaimResponse,
+    EvidenceCitationResponse
 )
 from app.generation.requirement_extraction import extract_requirements
 from app.retrieval.hybrid_search import hybrid_search
@@ -33,181 +35,152 @@ def get_db():
     finally:
         db.close()
 
-
-def _build_query_response(db: Session, query_id: uuid.UUID) -> QueryResponse:
-    """Helper to assemble the QueryResponse from DB state."""
-    query = db.query(RegulatoryQuery).filter(RegulatoryQuery.id == query_id).first()
-    if not query:
-        raise HTTPException(status_code=404, detail="Query not found")
-
-    response = db.query(ResponseModel).filter(
-        ResponseModel.query_id == query_id
-    ).order_by(ResponseModel.created_at.desc()).first()
-    
-    if not response:
-        raise HTTPException(status_code=404, detail="No response generated for query")
-
-    # Get requirements
-    db_reqs = db.query(Requirement).filter(Requirement.query_id == query_id).order_by(Requirement.req_code).all()
-    req_items = [
-        RequirementResponseItem(
-            req_code=r.req_code,
-            description=r.description,
-            status=r.status
-        ) for r in db_reqs
-    ]
-
-    # Get claims and citations
-    db_claims = db.query(Claim).filter(Claim.response_id == response.id).order_by(Claim.claim_code).all()
-    claim_items = []
-    for c in db_claims:
-        db_citations = db.query(Citation).filter(
-            Citation.claim_id == c.id, 
-            Citation.validated == True
-        ).all()
+@router.post("/queries", response_model=QueryResponse)
+def submit_query(
+    request: QueryRequest,
+    db: Session = Depends(get_db)
+):
+    """Run the full query pipeline."""
+    if not request.query_text or not request.query_text.strip():
+        raise HTTPException(status_code=400, detail="Query text cannot be empty.")
         
-        cit_items = []
-        for cit in db_citations:
-            # Need to get Evidence -> Chunk -> DocumentVersion -> Document
-            evidence = db.query(Evidence).filter(Evidence.id == cit.evidence_id).first()
-            if not evidence:
-                continue
-                
-            chunk = db.query(Chunk).filter(Chunk.id == evidence.chunk_id).first()
-            doc = db.query(Document).filter(Document.id == evidence.document_id).first()
-            
-            cit_items.append(CitationResponseItem(
-                evidence_id=cit.evidence_id,
-                evidence_code=evidence.evidence_code,
-                document=doc.filename if doc else None,
-                page_start=chunk.page_start if chunk else None,
-                page_end=chunk.page_end if chunk else None,
-                section=chunk.section if chunk else None
-            ))
-            
-        claim_items.append(ClaimResponseItem(
-            claim_id=c.id,
-            claim_code=c.claim_code,
-            claim_text=c.claim_text,
-            validation_state=c.validation_state,
-            citations=cit_items
-        ))
-
-    # Return empty list for contradictions for now (TASK-017)
-    return QueryResponse(
-        query_id=query.id,
-        response_id=response.id,
-        draft_text=response.draft_text,
-        sufficiency_status=response.sufficiency_status,
-        gap_summary=response.gap_summary,
-        requirements=req_items,
-        claims=claim_items,
-        contradictions=[],
-        status=response.status
-    )
-
-
-@router.post("/queries", response_model=QueryResponse, status_code=200)
-def create_query(query_data: QueryCreate, db: Session = Depends(get_db)):
-    """Submit a query and run canonical pipeline stages 1-7."""
-    query_text = query_data.query_text.strip()
-    if not query_text:
-        raise HTTPException(status_code=400, detail="Query text cannot be empty")
-
-    # Stage 1: Normalize & persist query
+    query_text = request.query_text.strip()
+    
+    # 1. Create and persist query
     query = RegulatoryQuery(query_text=query_text)
     db.add(query)
-    db.commit()
-    db.refresh(query)
+    db.flush()
     
-    # Let's track if we hit a critical failure
     try:
-        # Stage 2: Requirement extraction
-        try:
-            requirements = extract_requirements(db, query.id, query.query_text)
-        except Exception as e:
-            logger.exception("Failed to extract requirements")
-            raise HTTPException(status_code=500, detail="LLM_FAILED")
-            
-        # Stage 3-5: Retrieval & Evidence Pack Assembly
+        # 2. Extract structured requirements
+        requirements = extract_requirements(db, query.id, query_text)
+        
+        # 3. Retrieve evidence for each requirement
         evidence_pack = []
+        evidence_pack_dedup = set()
+        
         for req in requirements:
             search_query = f"{req.description} {' '.join(req.keywords)}"
-            try:
-                results = hybrid_search(db, search_query, k=5)
-                if not results:
-                    req.status = "NOT_COVERED"
-                    db.add(req)
-                else:
-                    req.status = "COVERED" # basic naive assignment until TASK-016
-                    db.add(req)
+            results = hybrid_search(db, search_query, k=5)
+            
+            for result in results:
+                if result.evidence_id:
+                    # Persist requirement_evidence relationship
+                    req_evd = RequirementEvidence(
+                        requirement_id=req.id,
+                        evidence_id=result.evidence_id,
+                        retrieval_score=result.score
+                    )
+                    # We might retrieve the same evidence for different requirements,
+                    # so handle unique constraint violations if we fetch the same one.
+                    # Or just query first:
+                    existing = db.query(RequirementEvidence).filter(
+                        RequirementEvidence.requirement_id == req.id,
+                        RequirementEvidence.evidence_id == result.evidence_id
+                    ).first()
+                    if not existing:
+                        db.add(req_evd)
                     
-                for r in results:
-                    if r.evidence_id and r.evidence_code:
-                        # Add to requirement_evidence join table
-                        join_row = RequirementEvidence(
-                            requirement_id=req.id,
-                            evidence_id=r.evidence_id,
-                            retrieval_score=r.score
-                        )
-                        db.add(join_row)
-                        
-                        # Add to pack
+                    if result.evidence_code not in evidence_pack_dedup:
                         evidence_pack.append({
-                            "evidence_code": r.evidence_code,
-                            "text": r.content,
-                            "source_type": "unknown" # not needed strictly by LLM
+                            "evidence_code": result.evidence_code,
+                            "text": result.content,
+                            "source_type": result.source_type if hasattr(result, "source_type") else "unknown"
                         })
-            except Exception as e:
-                logger.exception(f"Retrieval failed for req {req.req_code}")
-                req.status = "NOT_COVERED"
-                db.add(req)
-                # Don't fail the whole pipeline just because one retrieval failed
-
+                        evidence_pack_dedup.add(result.evidence_code)
+                        
         db.flush()
         
-        # Deduplicate evidence pack
-        seen_codes = set()
-        unique_evidence_pack = []
-        for e in evidence_pack:
-            if e["evidence_code"] not in seen_codes:
-                seen_codes.add(e["evidence_code"])
-                unique_evidence_pack.append(e)
-
-        # Stage 6: Response generation
-        req_dicts = [{"req_code": r.req_code, "description": r.description} for r in requirements]
-        try:
-            response, claims = generate_response(
-                db=db,
-                query_id=query.id,
-                query_text=query.query_text,
-                requirements=req_dicts,
-                evidence_pack=unique_evidence_pack
-            )
-        except LLMCallError as e:
-            # LLM failed completely
-            resp = ResponseModel(query_id=query.id, status="LLM_FAILED")
-            db.add(resp)
-            db.commit()
-            raise HTTPException(status_code=500, detail="LLM_FAILED")
+        if not evidence_pack:
+            logger.warning("No evidence retrieved for query %s", query.id)
+            # Empty evidence pack is okay, generation will handle it.
             
-        # Stage 7: Citation Validation
+        # 4. Generate response
+        req_dicts = [{"req_code": r.req_code, "description": r.description} for r in requirements]
+        response, claims = generate_response(db, query.id, query_text, req_dicts, evidence_pack)
+        
+        # 5. Resolve proposed citations
         for claim in claims:
-            validate_citations(db, claim.id, claim._cited_evidence_codes)
+            validate_citations(db, claim.id, getattr(claim, "_cited_evidence_codes", []))
             
         db.commit()
         
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Pipeline failed unexpectedly")
+    except LLMCallError as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail="PIPELINE_FAILED")
-        
-    return _build_query_response(db, query.id)
+        # If generation fails, we should still return a 500 per the contract
+        raise HTTPException(status_code=500, detail={"code": "LLM_FAILED", "message": str(e)})
+    except Exception as e:
+        db.rollback()
+        logger.exception("Pipeline failed")
+        raise HTTPException(status_code=500, detail={"code": "PIPELINE_FAILED", "message": str(e)})
+
+    # Build response structure
+    return build_query_response(db, query.id)
 
 
 @router.get("/queries/{query_id}", response_model=QueryResponse)
-def get_query(query_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Retrieve a previously run query."""
-    return _build_query_response(db, query_id)
+def get_query(
+    query_id: uuid.UUID,
+    db: Session = Depends(get_db)
+):
+    return build_query_response(db, query_id)
+
+
+def build_query_response(db: Session, query_id: uuid.UUID) -> dict:
+    """Helper to construct the API response for a query."""
+    query = db.query(RegulatoryQuery).filter(RegulatoryQuery.id == query_id).first()
+    if not query:
+        raise HTTPException(status_code=404, detail="Query not found")
+        
+    response = db.query(Response).filter(Response.query_id == query_id).order_by(Response.created_at.desc()).first()
+    requirements = db.query(Requirement).filter(Requirement.query_id == query_id).order_by(Requirement.req_code).all()
+    
+    req_list = []
+    for r in requirements:
+        req_list.append({
+            "req_code": r.req_code,
+            "description": r.description,
+            "status": r.status
+        })
+        
+    res_dict = {
+        "query_id": query.id,
+        "requirements": req_list,
+        "claims": [],
+        "contradictions": [],
+    }
+    
+    if response:
+        res_dict["response_id"] = response.id
+        res_dict["draft_text"] = response.draft_text
+        res_dict["sufficiency_status"] = response.sufficiency_status
+        res_dict["gap_summary"] = response.gap_summary
+        res_dict["status"] = response.status
+        
+        claims = db.query(Claim).filter(Claim.response_id == response.id).order_by(Claim.claim_code).all()
+        for c in claims:
+            citations = db.query(Citation).filter(Citation.claim_id == c.id).all()
+            cit_list = []
+            for cit in citations:
+                evd = db.query(Evidence).filter(Evidence.id == cit.evidence_id).first()
+                if evd:
+                    chunk = db.query(Chunk).filter(Chunk.id == evd.chunk_id).first()
+                    doc = db.query(Document).filter(Document.id == evd.document_id).first()
+                    cit_list.append({
+                        "evidence_id": evd.id,
+                        "evidence_code": evd.evidence_code,
+                        "document": doc.filename if doc else None,
+                        "page_start": chunk.page_start if chunk else None,
+                        "page_end": chunk.page_end if chunk else None,
+                        "section": chunk.section if chunk else None
+                    })
+            
+            res_dict["claims"].append({
+                "claim_id": c.id,
+                "claim_code": c.claim_code,
+                "claim_text": c.claim_text,
+                "validation_state": c.validation_state,
+                "citations": cit_list
+            })
+            
+    return res_dict

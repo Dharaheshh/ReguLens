@@ -105,6 +105,10 @@ def submit_query(
             validate_citations(db, claim.id, getattr(claim, "_cited_evidence_codes", []))
             validate_claim_semantics(db, claim.id)
             
+        # 6. Check evidence sufficiency
+        from app.validation.sufficiency_engine import run_sufficiency_check
+        run_sufficiency_check(db, query.id)
+            
         db.commit()
         
     except LLMCallError as e:

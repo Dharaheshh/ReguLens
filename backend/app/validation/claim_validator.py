@@ -100,13 +100,13 @@ def validate_claim_semantics(db: Session, claim_id: uuid.UUID) -> SemanticValida
         "Evaluate the claim based ONLY on the evidence above."
     )
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
-    ]
-
     try:
-        result = call_with_retry_and_fallback(messages, SemanticValidationOutput)
+        result = call_with_retry_and_fallback(
+            system_prompt=system_prompt,
+            user_content=user_prompt,
+            response_model=SemanticValidationOutput,
+            temperature=0.0
+        )
         
         claim.validation_state = result.validation_state
         claim.validation_reasoning = result.reasoning

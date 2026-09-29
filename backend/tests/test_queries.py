@@ -18,7 +18,15 @@ client = TestClient(app)
 @patch("app.generation.requirement_extraction.call_with_retry_and_fallback")
 @patch("app.retrieval.hybrid_search.hybrid_search")
 @patch("app.generation.response_generation.call_with_retry_and_fallback")
-def test_post_query_success(mock_response_llm, mock_hybrid_search, mock_req_llm):
+@patch("app.validation.claim_validator.call_with_retry_and_fallback")
+def test_post_query_success(mock_validator_llm, mock_response_llm, mock_hybrid_search, mock_req_llm):
+    # Mock Claim Validator LLM
+    from app.validation.claim_validator import SemanticValidationOutput
+    mock_validator_llm.return_value = SemanticValidationOutput(
+        validation_state="SUPPORTED",
+        reasoning="Test reasoning"
+    )
+    
     # Mock Requirement LLM
     mock_req_llm.return_value = RequirementExtractionOutput(
         requirements=[
@@ -102,7 +110,7 @@ def test_post_query_success(mock_response_llm, mock_hybrid_search, mock_req_llm)
     assert data["claims"][0]["citations"][0]["evidence_code"] == unique_evd
     
     # Validation state shouldn't be UNSUPPORTED because the citation was found
-    assert data["claims"][0]["validation_state"] is None
+    assert data["claims"][0]["validation_state"] == "SUPPORTED"
 
 @patch("app.generation.requirement_extraction.call_with_retry_and_fallback")
 def test_post_query_llm_failure(mock_req_llm):

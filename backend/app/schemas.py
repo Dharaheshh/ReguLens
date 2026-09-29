@@ -80,3 +80,30 @@ class QueryResponse(BaseModel):
     contradictions: list[ContradictionResponse] = []
     status: str | None = None
 
+# --- Response Review schemas ---
+
+class ResponsePatchRequest(BaseModel):
+    draft_text: str
+
+class ResponseApproveRequest(BaseModel):
+    reviewed_by: str
+
+class ResponseRejectRequest(BaseModel):
+    reviewed_by: str
+    reason: str | None = None
+
+class ResponseReviewResponse(BaseModel):
+    response_id: uuid.UUID
+    status: str
+    version: int | None = None
+    reviewed_at: str | None = None
+
+class AuditEventItem(BaseModel):
+    event_type: str
+    actor: str
+    payload: dict | None = None
+    created_at: str
+
+class AuditEventsResponse(BaseModel):
+    events: list[AuditEventItem]
+

@@ -4,6 +4,8 @@ POST /api/v1/documents
 POST /api/v1/documents/{document_id}/versions
 GET  /api/v1/documents
 GET  /api/v1/documents/{document_id}
+GET  /api/v1/documents/{document_id}/pdf   — Serve the raw PDF for human verification
+GET  /api/v1/evidence/{evidence_code}      — Get chunk text + metadata for citation verification
 """
 import os
 import uuid
@@ -12,6 +14,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -277,3 +280,76 @@ def get_document(
         doc_type=doc.doc_type,
         versions=version_items,
     )
+
+
+@router.get("/documents/{document_id}/pdf")
+def serve_document_pdf(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    """Serve the current PDF file for a document so the user can verify citations manually.
+
+    Returns the raw PDF binary with the correct Content-Disposition header so the
+    browser renders it inline (or downloads it).  This allows any human reviewer to
+    open the source document and cross-check the quoted evidence text against the
+    original page.
+    """
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "NOT_FOUND", "message": "Document not found.", "details": {}}
+        })
+
+    # Resolve the current version's file path
+    version = db.query(DocumentVersion).filter(
+        DocumentVersion.id == doc.current_version_id
+    ).first()
+    if not version or not os.path.exists(version.file_path):
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "FILE_NOT_FOUND", "message": "PDF file not found on disk.", "details": {}}
+        })
+
+    return FileResponse(
+        path=version.file_path,
+        media_type="application/pdf",
+        filename=doc.filename,
+        # inline so the browser opens it in its PDF viewer, not a download
+        headers={"Content-Disposition": f'inline; filename="{doc.filename}"'},
+    )
+
+
+@router.get("/evidence/{evidence_code}")
+def get_evidence_detail(
+    evidence_code: str,
+    db: Session = Depends(get_db),
+):
+    """Return the full chunk text, page range, section, and document metadata for
+    a given evidence code.
+
+    This is the citation verification endpoint — the frontend calls it when the
+    user clicks a citation chip so they can read the exact extracted text and
+    then open the source PDF to manually cross-check it.
+    """
+    # Join Evidence → Chunk → DocumentVersion → Document in one query
+    evidence = db.query(Evidence).filter(Evidence.evidence_code == evidence_code).first()
+    if not evidence:
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "NOT_FOUND", "message": f"Evidence '{evidence_code}' not found.", "details": {}}
+        })
+
+    chunk = db.query(Chunk).filter(Chunk.id == evidence.chunk_id).first()
+    doc = db.query(Document).filter(Document.id == evidence.document_id).first()
+
+    return {
+        "evidence_code": evidence.evidence_code,
+        "evidence_id": str(evidence.id),
+        "chunk_text": chunk.content if chunk else None,
+        "page_start": chunk.page_start if chunk else None,
+        "page_end": chunk.page_end if chunk else None,
+        "section": chunk.section if chunk else None,
+        "document_id": str(evidence.document_id),
+        "document_filename": doc.filename if doc else None,
+        "doc_type": doc.doc_type if doc else None,
+        # Convenience URL so the frontend can link directly to the PDF viewer
+        "pdf_url": f"/api/v1/documents/{evidence.document_id}/pdf",
+    }

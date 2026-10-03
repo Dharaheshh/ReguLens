@@ -19,8 +19,8 @@ class ChunkData:
 
 
 # Approximate tokens as words / 0.75 (conservative estimate)
-TARGET_TOKENS = 500
-MAX_CHARS = int(TARGET_TOKENS * 4.5)  # ~2250 chars ≈ 500 tokens
+TARGET_TOKENS = 250
+MAX_CHARS = int(TARGET_TOKENS * 4.5)  # ~1125 chars ≈ 250 tokens
 
 # Pattern to detect section headings (e.g. "1. Introduction", "Section 2.1", "## Heading")
 SECTION_HEADING_RE = re.compile(
@@ -43,10 +43,31 @@ def _detect_section(text: str) -> str | None:
 
 
 def _split_into_paragraphs(text: str) -> list[str]:
-    """Split text into paragraphs on double newlines or section headings."""
-    # Split on double newlines
+    """Split text into paragraphs on double newlines or section headings.
+    Sub-splits oversized blocks on single newlines so single-newline PDFs
+    do not produce gigantic multi-thousand-character chunks.
+    """
     raw_paragraphs = re.split(r"\n\s*\n", text)
-    paragraphs = [p.strip() for p in raw_paragraphs if p.strip()]
+    paragraphs: list[str] = []
+    for p in raw_paragraphs:
+        p_clean = p.strip()
+        if not p_clean:
+            continue
+        if len(p_clean) > MAX_CHARS:
+            sub_lines = [s.strip() for s in p_clean.split("\n") if s.strip()]
+            sub_accum: list[str] = []
+            sub_len = 0
+            for sl in sub_lines:
+                if sub_accum and (sub_len + len(sl)) > MAX_CHARS:
+                    paragraphs.append(" ".join(sub_accum))
+                    sub_accum = []
+                    sub_len = 0
+                sub_accum.append(sl)
+                sub_len += len(sl)
+            if sub_accum:
+                paragraphs.append(" ".join(sub_accum))
+        else:
+            paragraphs.append(p_clean)
     return paragraphs
 
 

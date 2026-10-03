@@ -56,14 +56,17 @@ def validate_claim_semantics(db: Session, claim_id: uuid.UUID) -> SemanticValida
         )
 
     evidence_pack = []
-    for cit in citations:
+    for cit in citations[:3]:
         evd = db.query(Evidence).filter(Evidence.id == cit.evidence_id).first()
         if evd:
             chunk = db.query(Chunk).filter(Chunk.id == evd.chunk_id).first()
             if chunk:
+                text = chunk.content
+                if len(text) > 900:
+                    text = text[:900].rsplit(" ", 1)[0] + "..."
                 evidence_pack.append({
                     "evidence_code": evd.evidence_code,
-                    "text": chunk.content,
+                    "text": text,
                     "source_type": evd.source_type
                 })
 
@@ -85,7 +88,13 @@ def validate_claim_semantics(db: Session, claim_id: uuid.UUID) -> SemanticValida
     system_prompt = (
         "You are an expert regulatory validation engine. Your task is to determine whether "
         "the provided claim is factually supported by the specific provided evidence.\n"
-        "You must output ONLY JSON matching the requested schema.\n\n"
+        "You must output ONLY JSON matching the requested schema.\n"
+        "The output MUST contain the exact key 'validation_state' and 'reasoning'. Do NOT use 'verdict' or 'evaluation'.\n\n"
+        "Example Output:\n"
+        "{\n"
+        "  \"validation_state\": \"SUPPORTED\",\n"
+        "  \"reasoning\": \"The evidence clearly supports the claim...\"\n"
+        "}\n\n"
         "Rules:\n"
         "- SUPPORTED: The claim is fully backed by the evidence.\n"
         "- PARTIALLY_SUPPORTED: Some aspects are supported, others are missing.\n"

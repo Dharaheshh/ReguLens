@@ -15,7 +15,7 @@ from app.validation.citation_validator import validate_citations
 def main():
     db = SessionLocal()
     try:
-        # 1. Create a query
+        
         query_text = (
             "Provide evidence supporting the microbiological safety of the "
             "cultivated-cell product and describe the controls used during production."
@@ -63,13 +63,6 @@ def main():
         for c in claims:
             print(f"[{c.claim_code}] {c.claim_text}")
             print(f"  Req: {c._req_code} | Proposed Citations: {c._cited_evidence_codes}")
-            
-            # 5. Validate Citations (Task-013)
-            validate_citations(db, c.id, c._cited_evidence_codes)
-            
-            # Refresh to see state
-            db.flush()
-            print(f"  Validation State: {c.validation_state}")
 
         db.commit()
     except Exception as e:

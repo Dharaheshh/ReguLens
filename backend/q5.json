@@ -1,0 +1,22 @@
+{
+  "query_id": "e6c5b5f2-5286-4e9e-91af-ab7038319bd5",
+  "response_id": "82cfaa37-319a-4854-8b70-4119c4cee55b",
+  "draft_text": "Based on the supplied evidence, no FDA 510(k) electromagnetic compatibility test results or titanium alloy fatigue limit data for implantable cardiac pacemakers were found in the provided documents.",
+  "sufficiency_status": "INSUFFICIENT",
+  "gap_summary": "REQ-01 (Obtain the FDA 510(k) submission documentation for the specific implantable cardiac pacemaker and extract the electromagnetic compatibility (EMC) test results, including test standards used (e.g., IEC 60601\u20111\u20112), test setup, exposure levels, and pass/fail outcomes.) is not covered.",
+  "requirements": [
+    {
+      "req_code": "REQ-01",
+      "description": "Obtain the FDA 510(k) submission documentation for the specific implantable cardiac pacemaker and extract the electromagnetic compatibility (EMC) test results, including test standards used (e.g., IEC 60601\u20111\u20112), test setup, exposure levels, and pass/fail outcomes.",
+      "status": "NOT_COVERED"
+    },
+    {
+      "req_code": "REQ-02",
+      "description": "Identify the titanium alloy composition used in the pacemaker housing and provide the material fatigue limit data (e.g., endurance limit, S\u2011N curve) from validated testing or material specifications, referencing applicable standards such as ASTM F1160 or ISO 5832-3.",
+      "status": "COVERED"
+    }
+  ],
+  "claims": [],
+  "contradictions": [],
+  "status": "draft"
+}

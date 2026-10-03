@@ -1,4 +1,10 @@
-"""Tests for TASK-009 - Hybrid Retrieval with RRF fusion."""
+"""Tests for TASK-009 - Hybrid Retrieval with RRF fusion.
+
+Phase 1 additions:
+- test_hybrid_search_irrelevant_query_returns_empty: verifies the relevance
+  floor drops garbage results for queries with no semantic/lexical relationship.
+- test_hybrid_search_never_exceeds_k: confirms hard top-k cap.
+"""
 import os
 import sys
 import uuid
@@ -111,10 +117,15 @@ def test_hybrid_search_returns_relevant_chunk():
 
     # Search for content we know is in the fixture
     db = SessionLocal()
+    import time
     try:
+        start_time = time.time()
         results = hybrid_search(db, "microbiological safety pathogen screening", k=5)
+        latency = time.time() - start_time
+        print(f"\n--- HYBRID SEARCH PIPELINE LATENCY: {latency:.4f} seconds ---")
 
         assert len(results) > 0, "Expected at least one search result"
+        assert len(results) <= 5, f"Expected at most 5 results, got {len(results)}"
 
         # The fixture contains "microbiological safety" on page 1 and
         # "pathogen screening" on page 2 — at least one chunk should match
@@ -129,5 +140,86 @@ def test_hybrid_search_returns_relevant_chunk():
             assert r.chunk_id is not None
             assert r.content is not None
             assert r.score > 0
+    finally:
+        db.close()
+
+
+# ── Phase 1: Relevance floor tests ──
+
+def test_hybrid_search_irrelevant_query_returns_empty():
+    """A query with no semantic/lexical relationship to the ingested corpus
+    should return an EMPTY list, not a low-quality top-5 of garbage results.
+
+    This verifies the RETRIEVAL_MIN_SCORE relevance floor works.
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.retrieval.hybrid_search import hybrid_search
+
+    client = TestClient(app)
+
+    # Ensure there is data in the DB (re-ingest fixture if needed)
+    fixture_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "fixtures", "sample_3page.pdf"
+    )
+    with open(fixture_path, "rb") as f:
+        resp = client.post(
+            "/api/v1/documents",
+            files={"file": ("sample_3page.pdf", f, "application/pdf")},
+            data={"doc_type": "scientific_paper", "is_synthetic": "true"},
+        )
+    # 201 = new, or might already exist — either is fine
+
+    db = SessionLocal()
+    try:
+        # "hi" has no semantic or lexical relationship to a regulatory dossier
+        results = hybrid_search(db, "hi")
+        assert results == [], (
+            f"Expected empty results for irrelevant query 'hi', "
+            f"got {len(results)} results with scores: "
+            f"{[r.score for r in results]}"
+        )
+
+        # Another test with a totally unrelated query
+        results2 = hybrid_search(db, "what's the weather today in Paris")
+        assert results2 == [], (
+            f"Expected empty results for unrelated query, "
+            f"got {len(results2)} results with scores: "
+            f"{[r.score for r in results2]}"
+        )
+    finally:
+        db.close()
+
+
+def test_hybrid_search_never_exceeds_k():
+    """hybrid_search must never return more than k results, regardless of how
+    many candidates fusion produces."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.retrieval.hybrid_search import hybrid_search
+
+    client = TestClient(app)
+
+    fixture_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "fixtures", "sample_3page.pdf"
+    )
+    with open(fixture_path, "rb") as f:
+        client.post(
+            "/api/v1/documents",
+            files={"file": ("sample_3page.pdf", f, "application/pdf")},
+            data={"doc_type": "scientific_paper", "is_synthetic": "true"},
+        )
+
+    db = SessionLocal()
+    try:
+        # With k=2, should never get more than 2
+        results = hybrid_search(db, "microbiological safety pathogen", k=2)
+        assert len(results) <= 2, f"Expected at most 2 results, got {len(results)}"
+
+        # With k=1, should never get more than 1
+        results1 = hybrid_search(db, "microbiological safety pathogen", k=1)
+        assert len(results1) <= 1, f"Expected at most 1 result, got {len(results1)}"
     finally:
         db.close()

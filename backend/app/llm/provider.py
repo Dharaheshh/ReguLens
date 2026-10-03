@@ -57,6 +57,7 @@ class LLMProvider:
         response = self._client.chat.completions.create(
             model=self._model,
             temperature=temperature,
+            max_tokens=1200,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},

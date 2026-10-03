@@ -91,12 +91,32 @@ def submit_query(
                         
         db.flush()
         
-        if not evidence_pack:
-            logger.warning("No evidence retrieved for query %s", query.id)
-            # Empty evidence pack is okay, generation will handle it.
-            
-        # 4. Generate response
         req_dicts = [{"req_code": r.req_code, "description": r.description} for r in requirements]
+        
+        # --- EVIDENCE GATE ---
+        # If EVERY requirement returned zero evidence above the relevance floor, 
+        # short-circuit immediately. Do not call the LLM to generate a response.
+        if not evidence_pack:
+            logger.warning("No evidence retrieved for query %s, short-circuiting.", query.id)
+            
+            # Create a response row indicating total failure to find evidence
+            response_row = Response(
+                query_id=query.id,
+                draft_text=None,
+                sufficiency_status="INSUFFICIENT",
+                gap_summary="No relevant evidence was found in the ingested documents for any part of this query.",
+                status="draft"
+            )
+            db.add(response_row)
+            
+            # Mark all requirements as NOT_COVERED
+            for req in requirements:
+                req.status = "NOT_COVERED"
+                
+            db.commit()
+            return build_query_response(db, query.id)
+
+        # 4. Generate response
         response, claims = generate_response(db, query.id, query_text, req_dicts, evidence_pack)
         
         # 5. Resolve proposed citations and validate semantics

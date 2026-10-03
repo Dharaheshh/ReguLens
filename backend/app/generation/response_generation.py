@@ -62,17 +62,26 @@ Respond with a JSON object matching this exact schema:
 }"""
 
 
+MAX_EVIDENCE_ITEMS = 5
+MAX_EVIDENCE_CHARS = 900
+
+
 def _build_evidence_pack_text(evidence_pack: list[dict]) -> str:
     """Build the evidence pack section with UNTRUSTED_EVIDENCE delimiters.
 
     Per SECURITY.md, all evidence text is wrapped in clearly labeled
     delimiters so the LLM treats it as data, not instructions.
+    Caps total items and per-item character length to fit strictly within
+    Groq's 8,000 TPM budget.
     """
     parts = []
-    for item in evidence_pack:
+    for item in evidence_pack[:MAX_EVIDENCE_ITEMS]:
+        text = item["text"]
+        if len(text) > MAX_EVIDENCE_CHARS:
+            text = text[:MAX_EVIDENCE_CHARS].rsplit(" ", 1)[0] + "..."
         parts.append(
             f'<UNTRUSTED_EVIDENCE id="{item["evidence_code"]}">\n'
-            f'{item["text"]}\n'
+            f'{text}\n'
             f'</UNTRUSTED_EVIDENCE>'
         )
     return "\n\n".join(parts)

@@ -1,59 +1,36 @@
-import { useState, useEffect } from 'react';
-import { apiClient } from './api/client';
-import type { HealthStatus } from './api/client';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AppLayout } from './components/layout/AppLayout';
+import { DocumentsPage } from './pages/DocumentsPage';
+import { QueryWorkspacePage } from './pages/QueryWorkspacePage';
+import { ReviewsPage } from './pages/ReviewsPage';
+
+// Placeholder Pages
+function PlaceholderPage({ title }: { title: string }) {
+  return (
+    <div className="rl-card p-8 flex flex-col items-center justify-center min-h-[400px] text-center">
+      <h2 className="text-xl font-semibold text-rl-neutral-800 mb-2">{title}</h2>
+      <p className="text-rl-neutral-500 max-w-md">
+        This screen is currently being built. The mock data and layout structure are ready.
+      </p>
+    </div>
+  );
+}
 
 function App() {
-  const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-
-  useEffect(() => {
-    const checkHealth = async () => {
-      try {
-        const data = await apiClient.getHealth();
-        setHealth(data);
-        setError(null);
-      } catch (err) {
-        console.error("Health check failed:", err);
-        setError("Backend unavailable");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkHealth();
-  }, []);
-
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
-        <h1 className="text-3xl font-bold text-gray-800 mb-6 border-b pb-4">
-          ReguLens
-        </h1>
-        
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-gray-600 font-medium">Backend:</span>
-            {loading ? (
-              <span className="text-blue-500 font-semibold animate-pulse">Checking backend...</span>
-            ) : error ? (
-              <span className="text-red-500 font-semibold">{error}</span>
-            ) : (
-              <span className="text-green-500 font-semibold">Connected</span>
-            )}
-          </div>
-
-          {!loading && !error && health && (
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600 font-medium">Status:</span>
-              <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-sm font-mono">
-                {health.status}
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<AppLayout />}>
+          <Route index element={<Navigate to="/queries" replace />} />
+          <Route path="documents" element={<DocumentsPage />} />
+          <Route path="queries" element={<QueryWorkspacePage />} />
+          <Route path="reviews" element={<ReviewsPage />} />
+          <Route path="audit" element={<PlaceholderPage title="Audit Log" />} />
+          <Route path="settings" element={<PlaceholderPage title="System Settings" />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   );
 }
 
